@@ -16,7 +16,7 @@ A scrollbar can be automatically shown, in the growth direction, when the number
 
 The order in which children are added is preserved. The flexframe "start", from which its children will be laid out, can be configured with Tk anchor values `nw` (default, top left), `sw` (bottom left), `ne` (top right) or `se` (bottom right). The block of children can be optionally centered in the flexframe.
 
-Each child is given a "parcel" of space equal in height and width to the largest of its siblings. About how children occupy their parcels, Tk anchors can be set to determine how each children "sticks" to the sides of the given space. The flexframe allows the configuration of a "sticky" strategy to be applied to all its children ("news" by default).
+Each child is given a "parcel" of space equal in height and width to the largest of its siblings. About how children occupy their parcels, Tk anchors can be set to determine how each child "sticks" to the sides of the given space. The flexframe allows the configuration of a "sticky" strategy to be applied to all its children ("news" by default).
 
 ![screenshot 3](docs/images/flexframe-3.png)
 
