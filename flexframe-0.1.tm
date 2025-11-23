@@ -12,6 +12,8 @@
 # Compatible with Tcl/Tk 8.6 and 9.0.
 package require Tk
 
+package provide flexframe 0.1
+
 namespace eval [namespace current] {
     if {![info exists flexframe_loaded]} {
         variable flexframe_loaded 1
