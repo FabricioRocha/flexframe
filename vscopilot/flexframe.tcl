@@ -33,6 +33,25 @@ namespace eval [namespace current] {
             array set itemsMap {}
             
             variable lastAdded {}
+            # module-level debug flag (0/1). Set to 1 to enable debug prints.
+            variable debug 0
+
+            # Helper debug printers: `dbg` for module-level messages, `idbg`
+            # for instance-aware messages (checks instance cfg(-debug)).
+            proc dbg {msg} {
+                variable debug
+                if {$debug} {puts $msg}
+            }
+            proc idbg {instNs msg} {
+                variable debug
+                if {$debug} {puts $msg; return}
+                if {$instNs ne {}} {
+                    if {[catch {namespace eval $instNs {set cfg(-debug)}} val]} {
+                        return
+                    }
+                    if {$val} {puts $msg}
+                }
+            }
 
 
             # Helper accessors to interact with instance namespaces.
@@ -70,6 +89,10 @@ namespace eval [namespace current] {
                     -autoscroll {
                         set vv [string tolower [string trim $v]]
                         if {$vv eq "1" || $vv eq "true"} {set v 1} elseif {$vv eq "0" || $vv eq "false"} {set v 0} else {error "invalid value for -autoscroll: '$val' (expected 0|1|true|false)"}
+                    }
+                    -debug {
+                        set vv [string tolower [string trim $v]]
+                        if {$vv eq "1" || $vv eq "true"} {set v 1} elseif {$vv eq "0" || $vv eq "false"} {set v 0} else {error "invalid value for -debug: '$val' (expected 0|1|true|false)"}
                     }
                     default {
                         # other options left permissive; validation may be done elsewhere
@@ -117,7 +140,7 @@ namespace eval [namespace current] {
 
                 # Defensive check: if the module-var doesn't exist, fail cleanly.
                 if {![info exists _modns] || [string length $_modns] == 0} {
-                    puts "_inst_from_path: internal error: module namespace not set"
+                    dbg "_inst_from_path: internal error: module namespace not set"
                     return {}
                 }
 
@@ -148,7 +171,7 @@ namespace eval [namespace current] {
                 set instNs [_makeInstNs]
                 
                 # TEST
-                puts "[clock format [clock seconds]] _create: path=$path instNs=$instNs"
+                dbg "[clock format [clock seconds]] _create: path=$path instNs=$instNs"
                 
                 # create data structures in the instance namespace
                 # initialize arrays explicitly so later `namespace eval` or
@@ -170,6 +193,7 @@ namespace eval [namespace current] {
                     -orient vertical
                     -start nw
                     -autoscroll 1
+                    -debug 0
                     -minsize {}
                     -sticky news
                     -minpad 0
@@ -194,7 +218,7 @@ namespace eval [namespace current] {
                 # record mapping from the widget path to the instance namespace
                 set path2ns($path) $instNs
                 # TEST
-                puts "[clock format [clock seconds]] _create: registered path2ns($path)=$instNs"
+                dbg "[clock format [clock seconds]] _create: registered path2ns($path)=$instNs"
                 
                 # copy defaults into instance namespace (expand in outer scope)
                 foreach {k v} $defaults {
@@ -232,7 +256,7 @@ namespace eval [namespace current] {
                 # Ensure the global module mapping is written into the module namespace
                 # (fully-qualified) so dispatch-time lookups find it reliably.
                 namespace eval $_modns [list set path2ns($path) $instNs]
-                puts "[clock format [clock seconds]] _create: registered (module) path2ns($path)=[namespace eval $_modns [list set path2ns($path)]]"
+                dbg "[clock format [clock seconds]] _create: registered (module) path2ns($path)=[namespace eval $_modns [list set path2ns($path)]]"
 
                 # Bind configure events to call the module-level _onConfigure
                 # directly with the instance namespace and widget path captured
@@ -279,11 +303,11 @@ namespace eval [namespace current] {
                 variable _modns
                 # Diagnostic: show module namespace and currently-registered path2ns keys
                 if {[info exists _modns] && $_modns ne {}} {
-                    puts "[clock format [clock seconds]] _cmd_dispatch: module=$_modns path2ns keys=[namespace eval $_modns {join [array names path2ns] , }]"
+                    dbg "[clock format [clock seconds]] _cmd_dispatch: module=$_modns path2ns keys=[namespace eval $_modns {join [array names path2ns] , }]"
                 } else {
-                    puts "[clock format [clock seconds]] _cmd_dispatch: module=(unset)"
+                    dbg "[clock format [clock seconds]] _cmd_dispatch: module=(unset)"
                 }
-                puts "[clock format [clock seconds]] _cmd_dispatch: path=$path cmd=$cmd args=$args"
+                dbg "[clock format [clock seconds]] _cmd_dispatch: path=$path cmd=$cmd args=$args"
                 switch -- $cmd {
                     add {return [eval [list _cmd_add $path] $args]}
                     remove {return [eval [list _cmd_remove $path] $args]}
@@ -369,9 +393,9 @@ namespace eval [namespace current] {
                 variable _modns
                 variable lastAdded
                 variable itemsMap
-                puts "Entering _cmd_add: path=$path child=$childPath args=$args"
+                dbg "Entering _cmd_add: path=$path child=$childPath args=$args"
                 if {[info exists _modns] && $_modns ne {}} {
-                    puts "[clock format [clock seconds]] _cmd_add: module=$_modns path2ns keys=[namespace eval $_modns {join [array names path2ns] , }]"
+                    dbg "[clock format [clock seconds]] _cmd_add: module=$_modns path2ns keys=[namespace eval $_modns {join [array names path2ns] , }]"
                 }
                 
                 set index {}
@@ -384,9 +408,9 @@ namespace eval [namespace current] {
                     variable children; variable items; variable canvas
                 }
                 # debug: show entry and current module storage snapshot
-                puts "[clock format [clock seconds]] _cmd_add: ENTER path=$path child=$childPath instNs=$instNs"
-                puts "[clock format [clock seconds]] _cmd_add: pre-store lastAdded=[info exists lastAdded] value=[set lastAdded]"
-                puts "[clock format [clock seconds]] _cmd_add: pre-store itemsMap keys=[join [array names itemsMap] , ]"
+                idbg $instNs "[clock format [clock seconds]] _cmd_add: ENTER path=$path child=$childPath instNs=$instNs"
+                idbg $instNs "[clock format [clock seconds]] _cmd_add: pre-store lastAdded=[info exists lastAdded] value=[set lastAdded]"
+                idbg $instNs "[clock format [clock seconds]] _cmd_add: pre-store itemsMap keys=[join [array names itemsMap] , ]"
                 # ensure child exists
                 if {![winfo exists $childPath]} {error "child $childPath doesn't exist"}
 
@@ -409,7 +433,7 @@ namespace eval [namespace current] {
 
                 # We no longer create the canvas window here; defer to _recalc which
                 # deterministically creates or finds canvas windows by tag.
-                puts "[clock format [clock seconds]] _cmd_add: appended child $childPath to $path (recalc will create window)"
+                idbg $instNs "[clock format [clock seconds]] _cmd_add: appended child $childPath to $path (recalc will create window)"
                 ${_modns}::_recalc $instNs $path
             }
 
@@ -580,11 +604,11 @@ namespace eval [namespace current] {
                 }
 
                 # TEST : report layout decisions and items
-                puts "[clock format [clock seconds]] _recalc $path -- w=$w h=$h n=$n maxw=$maxw maxh=$maxh parcel=$parcel spacing=$spacing minpad=$minpad cols=$cols rows=$rows needV=$needV needH=$needH"
+                idbg $instNs "[clock format [clock seconds]] _recalc $path -- w=$w h=$h n=$n maxw=$maxw maxh=$maxh parcel=$parcel spacing=$spacing minpad=$minpad cols=$cols rows=$rows needV=$needV needH=$needH"
                 # TEST : print module-level itemsMap entries for this instance
                 variable itemsMap
                 variable lastAdded
-                puts "[clock format [clock seconds]] itemsMap keys: [join [array names itemsMap] , ]"
+                idbg $instNs "[clock format [clock seconds]] itemsMap keys: [join [array names itemsMap] , ]"
 
                 # Place children in order into the grid determined by rows/cols and anchor
                 # interpret -start anchor
@@ -605,10 +629,10 @@ namespace eval [namespace current] {
                 # namespace scoping oddities.
                 set children [inst_get $instNs children]
                 # Diagnostic: show raw children value and length, and canvas widget
-                puts "[clock format [clock seconds]] _recalc: children='$children' llength=[llength $children]"
+                idbg $instNs "[clock format [clock seconds]] _recalc: children='$children' llength=[llength $children]"
                 set canvasWidget [inst_get $instNs canvas]
-                puts "[clock format [clock seconds]] _recalc: canvasWidget=$canvasWidget"
-                puts "[clock format [clock seconds]] _recalc: instance children (ns): [join [namespace eval $instNs {array get children}] , ]"
+                idbg $instNs "[clock format [clock seconds]] _recalc: canvasWidget=$canvasWidget"
+                idbg $instNs "[clock format [clock seconds]] _recalc: instance children (ns): [join [namespace eval $instNs {array get children}] , ]"
                 set i 0
                 foreach child $children {
                     set idx $i
@@ -633,7 +657,7 @@ namespace eval [namespace current] {
                     # compute anchor for canvas create_window according to -start
                     set anchor [cfg_get $instNs -start]
 
-                    puts "[clock format [clock seconds]] _recalc: checking child=$child winfo_exists=[winfo exists $child] canvasWidget=$canvasWidget"
+                    idbg $instNs "[clock format [clock seconds]] _recalc: checking child=$child winfo_exists=[winfo exists $child] canvasWidget=$canvasWidget"
 
                     if {[namespace eval $instNs [list info exists items($child)]]} {
                         set itemId [namespace eval $instNs [list set items($child)]]
@@ -655,16 +679,16 @@ namespace eval [namespace current] {
                             set tagName "flexframe_${safePath}_${safeChild}"
                             # create the canvas window and capture the returned id
                             set newId [eval [list $canvasWidget create window $x $y -window $child -anchor $anchor -tags $tagName]]
-                            puts "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
+                            idbg $instNs "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
                             if {$newId eq {}} {
-                                puts "[clock format [clock seconds]] _recalc: ERROR creating window for $child (empty id)"
+                                idbg $instNs "[clock format [clock seconds]] _recalc: ERROR creating window for $child (empty id)"
                             } else {
                                 namespace eval $instNs [list set items($child) $newId]
                                 namespace eval $instNs [list set itemsTag($child) $tagName]
                                 set key [list $path $child]
                                 set itemsMap($key) $newId
                                 set lastAdded $key
-                                puts "[clock format [clock seconds]] _recalc: created window id $newId for $child (stored key=$key tag=$tagName)"
+                                idbg $instNs "[clock format [clock seconds]] _recalc: created window id $newId for $child (stored key=$key tag=$tagName)"
                             }
                         }
                     } else {
@@ -672,16 +696,16 @@ namespace eval [namespace current] {
                         set safeChild [string map {. / : _} $child]
                         set tagName "flexframe_${safePath}_${safeChild}"
                         set newId [eval [list $canvasWidget create window $x $y -window $child -anchor $anchor -tags $tagName]]
-                        puts "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
+                        idbg $instNs "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
                         if {$newId eq {}} {
-                            puts "[clock format [clock seconds]] _recalc: ERROR creating window for $child (empty id)"
+                            idbg $instNs "[clock format [clock seconds]] _recalc: ERROR creating window for $child (empty id)"
                         } else {
                             namespace eval $instNs [list set items($child) $newId]
                             namespace eval $instNs [list set itemsTag($child) $tagName]
                             set key [list $path $child]
                             set itemsMap($key) $newId
                             set lastAdded $key
-                            puts "[clock format [clock seconds]] _recalc: created window id $newId for $child (stored key=$key tag=$tagName)"
+                            idbg $instNs "[clock format [clock seconds]] _recalc: created window id $newId for $child (stored key=$key tag=$tagName)"
                         }
                     }
                     incr i
@@ -700,16 +724,19 @@ namespace eval [namespace current] {
                 }
 
                 # Final diagnostics: list canvas items and per-instance items array
-                puts "[clock format [clock seconds]] _recalc: canvas find all -> [eval [list $canvasWidget find all]]"
-                puts "[clock format [clock seconds]] _recalc: instance items (ns) -> [namespace eval $instNs {join [array names items] , }]"
+                idbg $instNs "[clock format [clock seconds]] _recalc: canvas find all -> [eval [list $canvasWidget find all]]"
+                idbg $instNs "[clock format [clock seconds]] _recalc: instance items (ns) -> [namespace eval $instNs {join [array names items] , }]"
             }
 
         } ;# end namespace flexframe
 
         # Diagnostic: dump internal module state for debugging
         proc dump_state {} {
+            # Only produce dump output when module debug is enabled.
+            variable debug
+            if {![info exists debug] || !$debug} {return ""}
             variable path2ns
-                puts "--- flexframe::dump_state ---"
+            puts "--- flexframe::dump_state ---"
             puts "path2ns keys: [join [array names path2ns] , ]"
             foreach p [array names path2ns] {
                 set inst [set path2ns($p)]
@@ -727,6 +754,7 @@ namespace eval [namespace current] {
                 } err2
             }
             puts "--- end dump ---"
+            return ""
         }
 
         # Provide a convenient creation command in the namespace where this
