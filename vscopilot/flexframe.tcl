@@ -230,7 +230,7 @@ namespace eval [namespace current] {
                 }
 
                 set canvasName ${path}.c
-                ::canvas $canvasName -highlightthickness 0 -borderwidth 0
+                ::canvas $canvasName -highlightthickness 0 -borderwidth 0 -confine 1
                 grid $canvasName -row 0 -column 0 -sticky news
                 namespace eval $instNs [list set canvas $canvasName]
 
@@ -420,10 +420,12 @@ namespace eval [namespace current] {
                 # ensure child exists
                 if {![winfo exists $childPath]} {error "child $childPath doesn't exist"}
 
-                # if child currently managed by geometry, forget it
-                catch {pack forget $childPath}
-                catch {grid forget $childPath}
-                catch {place forget $childPath}
+                # Require that children be created as descendants of the flexframe
+                # instance (e.g. ${path}.child). This prevents reparenting and
+                # geometry races caused by adding widgets managed elsewhere.
+                if {[string match "${path}.*" $childPath] == 0} {
+                    error "child '$childPath' must be created as a descendant of '$path' (e.g. '${path}.name')"
+                }
 
                 # insert into list
                 if {$index eq {}} {
@@ -439,8 +441,8 @@ namespace eval [namespace current] {
 
                 # We no longer create the canvas window here; defer to _recalc which
                 # deterministically creates or finds canvas windows by tag.
-                idbg $instNs "[clock format [clock seconds]] _cmd_add: appended child $childPath to $path (recalc will create window)"
-                ${_modns}::_recalc $instNs $path
+                idbg $instNs "[clock format [clock seconds]] _cmd_add: appended child $childPath to $path (scheduling recalc)"
+                ${_modns}::_schedule_recalc $instNs $path
             }
 
             # _cmd_remove: remove child
@@ -502,6 +504,9 @@ namespace eval [namespace current] {
                 namespace eval $instNs {
                     variable cfg; variable children; variable items; variable canvas; variable vscroll
                 }
+
+                # Let pending geometry settle before we measure and create windows.
+                update idletasks
 
                 # get current canvas viewport size (fetch into local vars)
                 set wh [namespace eval $instNs {list [winfo width $canvas] [winfo height $canvas]}]
@@ -681,6 +686,8 @@ namespace eval [namespace current] {
                             set safePath [string map {. _} $path]
                             set safeChild [string map {. / : _} $child]
                             set tagName "flexframe_${safePath}_${safeChild}"
+                            # ensure geometry settled for the child before creating window
+                            update idletasks
                             # create the canvas window and capture the returned id
                             set newId [eval [list $canvasWidget create window $x $y -window $child -anchor $anchor -tags $tagName]]
                             idbg $instNs "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
@@ -699,6 +706,7 @@ namespace eval [namespace current] {
                         set safePath [string map {. _} $path]
                         set safeChild [string map {. / : _} $child]
                         set tagName "flexframe_${safePath}_${safeChild}"
+                        update idletasks
                         set newId [eval [list $canvasWidget create window $x $y -window $child -anchor $anchor -tags $tagName]]
                         idbg $instNs "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
                         if {$newId eq {}} {

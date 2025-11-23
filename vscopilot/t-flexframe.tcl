@@ -46,13 +46,13 @@ grid .right.hf -in .right -row 0 -column 0 -sticky news
 
 # Create 15 square-ish buttons for each flexframe
 for {set i 1} {$i <= 15} {incr i} {
-    set btnV .vb$i
+    set btnV ".left.vf.btn$i"
     button $btnV -text $i -width 4 -height 2
     if {[catch { .left.vf add $btnV } err]} {
         puts stderr "Error adding $btnV to .left.vf: $err"
     }
 
-    set btnH .hb$i
+    set btnH ".right.hf.btn$i"
     button $btnH -text $i -width 4 -height 2
     if {[catch { .right.hf add $btnH } err]} {
         puts stderr "Error adding $btnH to .right.hf: $err"
