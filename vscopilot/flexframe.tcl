@@ -439,6 +439,7 @@ namespace eval [namespace current] {
 
             # _cmd_remove: remove child
             proc _cmd_remove {path childPath} {
+                variable _modns
                 set instNs [${_modns}::_inst_from_path $path]
                 if {$instNs eq {}} {error "internal: instance namespace not found"}
 
@@ -450,14 +451,11 @@ namespace eval [namespace current] {
                         lappend new $c
                     } else {
                         # delete the canvas item if it exists (instance-local storage)
-                        namespace eval $instNs {
-                            variable items
-                            if {[info exists items($childPath)]} {
-                                set id $items($childPath)
-                                set canvasWidget $canvas
-                                if {$id ne {}} {eval [list $canvasWidget delete $id]}
-                                unset items($childPath)
-                            }
+                        set canvasWidget [inst_get $instNs canvas]
+                        if {[namespace eval $instNs [list info exists items($childPath)]]} {
+                            set id [namespace eval $instNs [list set items($childPath)]]
+                            if {$id ne {}} {eval [list $canvasWidget delete $id]}
+                            namespace eval $instNs [list unset items($childPath)]
                         }
                     }
                 }
