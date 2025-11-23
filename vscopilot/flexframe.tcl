@@ -234,13 +234,19 @@ namespace eval [namespace current] {
                 grid $canvasName -row 0 -column 0 -sticky news
                 namespace eval $instNs [list set canvas $canvasName]
 
-                # TODO: for -orient horizontal, create horizontal scrollbar; the scrollbar
-                # must be gridded/removed as needed during layout recalculation.
+                # Create both vertical and horizontal scrollbars. We will show
+                # or hide them in _recalc depending on orientation and content.
                 set vscrollName ${path}.vs
                 ttk::scrollbar $vscrollName -orient vertical -command [list $canvasName yview]
                 grid $vscrollName -row 0 -column 1 -sticky ns
                 eval [list $canvasName configure -yscrollcommand [list $vscrollName set]]
                 namespace eval $instNs [list set vscroll $vscrollName]
+
+                set hscrollName ${path}.hs
+                ttk::scrollbar $hscrollName -orient horizontal -command [list $canvasName xview]
+                grid $hscrollName -row 1 -column 0 -sticky ew
+                eval [list $canvasName configure -xscrollcommand [list $hscrollName set]]
+                namespace eval $instNs [list set hscroll $hscrollName]
 
                 # allow frame to expand (grid manager row/columnconfigure)
                 grid rowconfigure $path 0 -weight 1
@@ -591,8 +597,8 @@ namespace eval [namespace current] {
                     set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
                     if {$autoscroll && $contentW > $w} {set needH 1} else {set needH 0}
                     if {$needH} {
-                        set vscrollWidget [inst_get $instNs vscroll]
-                        set sH [winfo reqheight $vscrollWidget]
+                        set hscrollWidget [inst_get $instNs hscroll]
+                        set sH [winfo reqheight $hscrollWidget]
                         set availH2 [expr {$h - $sH}]
                         set rows [expr {int((($availH2 - 2*$minpad) + $spacing)/($parcel + $spacing))}]
                         if {$rows < 1} {set rows 1}
@@ -715,10 +721,16 @@ namespace eval [namespace current] {
                 set canvasWidget [inst_get $instNs canvas]
                 eval [list $canvasWidget configure -scrollregion [list 0 0 $contentW $contentH]]
                 set vscrollWidget [inst_get $instNs vscroll]
+                set hscrollWidget [inst_get $instNs hscroll]
                 if {$needV} {
                     eval [list grid $vscrollWidget -row 0 -column 1 -sticky ns]
                 } else {
                     eval [list grid remove $vscrollWidget]
+                }
+                if {$needH} {
+                    eval [list grid $hscrollWidget -row 1 -column 0 -sticky ew]
+                } else {
+                    eval [list grid remove $hscrollWidget]
                 }
 
                 # Final diagnostics: list canvas items and per-instance items array
