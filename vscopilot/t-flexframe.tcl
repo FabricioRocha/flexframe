@@ -48,34 +48,24 @@ grid .right.hf -in .right -row 0 -column 0 -sticky news
 for {set i 1} {$i <= 15} {incr i} {
     set btnV .vb$i
     button $btnV -text $i -width 4 -height 2
-    if {[catch { ::flexframe::_cmd_add .left.vf $btnV } err]} {
-        puts "direct add: ::flexframe::_cmd_add .left.vf $btnV -> ERROR: $err"
+    if {[catch { .left.vf add $btnV } err]} {
+        puts "direct add: .left.vf add $btnV -> ERROR: $err"
     } else {
-        puts "direct add: ::flexframe::_cmd_add .left.vf $btnV -> OK"
+        puts "direct add: .left.vf add $btnV -> OK"
     }
     # Print both global and namespace-internal diagnostics for storage (safe, caught)
-    if {[info exists ::flexframe::lastAdded]} {
-        puts "lastAdded (global): $::flexframe::lastAdded"
-    } else {
-        puts "lastAdded (global): (none)"
-    }
-    if {[catch {namespace eval ::flexframe {set lastAdded}} nsVal]} {
+    if {[catch {namespace eval flexframe {set lastAdded}} nsVal]} {
         puts "lastAdded (ns): (none)"
     } else {
         puts "lastAdded (ns): $nsVal"
     }
-    if {[info exists ::flexframe::itemsMap]} {
-        puts "ItemsMap after left add (global): [join [array names ::flexframe::itemsMap] , ]"
-    } else {
-        puts "ItemsMap after left add (global): (none)"
-    }
-    if {[catch {namespace eval ::flexframe {join [array names itemsMap] ,}} nsKeys]} {
+    if {[catch {namespace eval flexframe {join [array names itemsMap] ,}} nsKeys]} {
         puts "ItemsMap after left add (ns): (none)"
     } else {
         puts "ItemsMap after left add (ns): $nsKeys"
     }
-    # show instance-local items for the left instance if available
-    if {[catch {namespace eval ::flexframe {set path2ns(.left.vf)}} instNs]} {
+    # show instance-local items for the left instance if available (safe, simple)
+    if {[catch {namespace eval flexframe {set path2ns(.left.vf)}} instNs]} {
         puts "Left instance items: (no instance)"
     } else {
         if {[catch {namespace eval $instNs {join [array names items] ,}} instItems]} {
@@ -87,25 +77,28 @@ for {set i 1} {$i <= 15} {incr i} {
 
     set btnH .hb$i
     button $btnH -text $i -width 4 -height 2
-    if {[catch { ::flexframe::_cmd_add .right.hf $btnH } err]} {
-        puts "direct add: ::flexframe::_cmd_add .right.hf $btnH -> ERROR: $err"
+    if {[catch { .right.hf add $btnH } err]} {
+        puts "direct add: .right.hf add $btnH -> ERROR: $err"
     } else {
-        puts "direct add: ::flexframe::_cmd_add .right.hf $btnH -> OK"
+        puts "direct add: .right.hf add $btnH -> OK"
     }
-    if {[info exists ::flexframe::lastAdded]} {
-        puts "lastAdded: $::flexframe::lastAdded"
+    if {[catch {namespace eval flexframe {join [array names itemsMap] ,}} nsKeysR]} {
+        puts "ItemsMap after right add: (none)"
     } else {
-        puts "lastAdded: (none)"
+        puts "ItemsMap after right add: $nsKeysR"
     }
-    puts "ItemsMap after right add: [join [array names ::flexframe::itemsMap] , ]"
 }
 
 # Diagnostics: show children and items mapping after creation
 puts "Left children: [.left.vf children]"
 puts "Right children: [.right.hf children]"
-puts "ItemsMap keys: [join [array names ::flexframe::itemsMap] , ]"
-# Call module dump for a definitive snapshot
-if {[catch {::flexframe::dump_state} dsErr]} {puts "dump_state error: $dsErr"}
+if {[catch {namespace eval flexframe {join [array names itemsMap] ,}} im]} {
+    puts "ItemsMap keys: (none)"
+} else {
+    puts "ItemsMap keys: $im"
+}
+# Call module dump for a definitive snapshot (module namespace)
+if {[catch {namespace eval flexframe {dump_state}} dsErr]} {puts "dump_state error: $dsErr"}
 
 # Controls for left (vertical) flexframe
 frame .controlsL

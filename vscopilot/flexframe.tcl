@@ -11,23 +11,29 @@
 package require Tk
 
 namespace eval [namespace current] {
-    if {![info exists ::flexframe_loaded]} {
-        variable ::flexframe_loaded 1
+    if {![info exists flexframe_loaded]} {
+        variable flexframe_loaded 1
 
         # Base namespace for this module inside the current namespace.
-        namespace eval ::flexframe {
+        namespace eval flexframe {
 
             # Instance counter for unique instance namespaces
             variable _instCounter 0
+            
             # mapping from widget path -> instance namespace
             variable path2ns
+            array set path2ns {}
+            
+            # fully-qualified module namespace name (cached)
+            variable _modns
+            set _modns [namespace current]
+            
             # global mapping for canvas item ids: key is "instNs|childPath" -> id
             variable itemsMap
-            # lastAdded for diagnostics (store the last key added)
-            variable lastAdded {}
-            # Ensure storage is initialized (avoid relying on lazy creation)
             array set itemsMap {}
-            set lastAdded ""
+            
+            variable lastAdded {}
+
 
             # Helper accessors to interact with instance namespaces.
             # These centralize `namespace eval` usage and simplify the rest
@@ -44,7 +50,32 @@ namespace eval [namespace current] {
                 return [namespace eval $instNs [list set cfg($key)]]
             }
             proc cfg_set {instNs key val} {
-                namespace eval $instNs [list set cfg($key) $val]
+                # Validate and normalize some well-known options here so callers
+                # get immediate feedback when they set invalid values.
+                set k $key
+                set v $val
+                switch -- $k {
+                    -orient {
+                        set vv [string tolower [string trim $v]]
+                        if {$vv eq ""} {set vv "vertical"}
+                        set c [string index $vv 0]
+                        if {$c eq "v"} {set v "vertical"} elseif {$c eq "h"} {set v "horizontal"} else {error "invalid value for -orient: '$val' (expected v|vertical|h|horizontal)"}
+                    }
+                    -start {
+                        set vv [string tolower [string trim $v]]
+                        set allowed {nw ne sw se}
+                        if {[lsearch -exact $allowed $vv] == -1} {error "invalid value for -start: '$val' (expected anchor like nw|ne|sw|se|n|s|e|w|center)"}
+                        set v $vv
+                    }
+                    -autoscroll {
+                        set vv [string tolower [string trim $v]]
+                        if {$vv eq "1" || $vv eq "true"} {set v 1} elseif {$vv eq "0" || $vv eq "false"} {set v 0} else {error "invalid value for -autoscroll: '$val' (expected 0|1|true|false)"}
+                    }
+                    default {
+                        # other options left permissive; validation may be done elsewhere
+                    }
+                }
+                namespace eval $instNs [list set cfg($key) $v]
             }
 
             ################################################################
@@ -77,6 +108,30 @@ namespace eval [namespace current] {
                 return [namespace current]::inst$_instCounter
             }
 
+            # _inst_from_path: find which instance namespace owns the given widget path
+            proc _inst_from_path {path} {
+                # Look up which instance namespace owns the given widget path.
+                # Use the cached module namespace name `_modns` and fully-qualify
+                # the array access to avoid fragile `variable` scoping issues.
+                variable _modns
+
+                # Defensive check: if the module-var doesn't exist, fail cleanly.
+                if {![info exists _modns] || [string length $_modns] == 0} {
+                    puts "_inst_from_path: internal error: module namespace not set"
+                    return {}
+                }
+
+                # Fully-qualified array element name, e.g. ::myns::path2ns(.foo)
+                set fq "${_modns}::path2ns($path)"
+
+                # Use info exists on the fully-qualified element; if present, return it.
+                if {[info exists $fq]} {
+                    # Use set with the qualified name to return the value.
+                    return [set ${_modns}::path2ns($path)]
+                }
+                return {}
+            }
+
             ################################################################
             # Public API: create
             ################################################################
@@ -90,14 +145,20 @@ namespace eval [namespace current] {
             # RETURN: none; defines the widget command
             proc create {path args} {
                 # choose an instance namespace under this module in caller
-                set instNs [::flexframe::_makeInstNs]
+                set instNs [_makeInstNs]
+                
+                # TEST
                 puts "[clock format [clock seconds]] _create: path=$path instNs=$instNs"
+                
                 # create data structures in the instance namespace
+                # initialize arrays explicitly so later `namespace eval` or
+                # `info exists` checks don't accidentally treat them as scalars
                 namespace eval $instNs {
-                    variable w
+                    variable w          ;# base frame Tk path
                     variable cfg
-                    variable children
-                    variable items   ;# mapping child -> canvas item id
+                    variable children {}
+                    array set items {}
+                    array set itemsTag {}
                     variable canvas
                     variable vscroll
                     variable needVScroll 0
@@ -123,16 +184,18 @@ namespace eval [namespace current] {
                     set given($opt) $val
                 }
 
-                # create the outer frame
-                eval ::frame $path
+                # create the Tk base frame; store in w
+                ::frame $path
+                namespace eval $instNs [list set w $path]
 
                 # store path and defaults inside the instance namespace
                 namespace eval $instNs {array set cfg {}}
-                # set the widget path into the instance namespace (expand $path here)
-                namespace eval $instNs [list set w $path]
+                
                 # record mapping from the widget path to the instance namespace
-                set ::flexframe::path2ns($path) $instNs
+                set path2ns($path) $instNs
+                # TEST
                 puts "[clock format [clock seconds]] _create: registered path2ns($path)=$instNs"
+                
                 # copy defaults into instance namespace (expand in outer scope)
                 foreach {k v} $defaults {
                     namespace eval $instNs [list set cfg($k) $v]
@@ -142,38 +205,47 @@ namespace eval [namespace current] {
                     namespace eval $instNs [list set cfg($k) $v]
                 }
 
-                # inside frame create a canvas (viewport) and scrollbar(s)
                 set canvasName ${path}.c
-                set vscrollName ${path}.vs
                 ::canvas $canvasName -highlightthickness 0 -borderwidth 0
-                ::scrollbar $vscrollName -orient vertical -command [list $canvasName yview]
-
-                # put canvas and scrollbar into the outer frame using grid
-                eval [list grid $canvasName -row 0 -column 0 -sticky news]
-                eval [list grid $vscrollName -row 0 -column 1 -sticky ns]
-                # allow frame to expand (grid manager row/columnconfigure)
-                eval [list grid rowconfigure $path 0 -weight 1]
-                eval [list grid columnconfigure $path 0 -weight 1]
-
-                # set canvas scroll commands (pass list to avoid word-splitting)
-                eval [list $canvasName configure -yscrollcommand [list $vscrollName set]]
-
-                # initialize internal variables (set names/vars with expanded values)
+                grid $canvasName -row 0 -column 0 -sticky news
                 namespace eval $instNs [list set canvas $canvasName]
+
+                # TODO: for -orient horizontal, create horizontal scrollbar; the scrollbar
+                # must be gridded/removed as needed during layout recalculation.
+                set vscrollName ${path}.vs
+                ttk::scrollbar $vscrollName -orient vertical -command [list $canvasName yview]
+                grid $vscrollName -row 0 -column 1 -sticky ns
+                eval [list $canvasName configure -yscrollcommand [list $vscrollName set]]
                 namespace eval $instNs [list set vscroll $vscrollName]
-                namespace eval $instNs {set children {}}
 
+                # allow frame to expand (grid manager row/columnconfigure)
+                grid rowconfigure $path 0 -weight 1
+                grid columnconfigure $path 0 -weight 1
 
+                
                 # bind configure events to recalc layout
                 # need to capture instNs in closure form
-                interp alias {} ${path}::_ontkcfg {} ::flexframe::_onConfigure $instNs $path
-                eval [list bind $path <Configure> [list ::flexframe::_onConfigure $instNs $path]]
-                eval [list bind $canvasName <Configure> [list ::flexframe::_onConfigure $instNs $path]]
+                # use the module-scoped cached `_modns` so we always operate on
+                # the same module namespace regardless of local scoping.
+                variable _modns
+
+                # Ensure the global module mapping is written into the module namespace
+                # (fully-qualified) so dispatch-time lookups find it reliably.
+                namespace eval $_modns [list set path2ns($path) $instNs]
+                puts "[clock format [clock seconds]] _create: registered (module) path2ns($path)=[namespace eval $_modns [list set path2ns($path)]]"
+
+                # Bind configure events to call the module-level _onConfigure
+                # directly with the instance namespace and widget path captured
+                # as literal arguments. This avoids creating transient per-widget
+                # interp aliases which can be fragile after command renames.
+                eval [list bind $path <Configure> [list ${_modns}::_onConfigure $instNs $path]]
+                eval [list bind $canvasName <Configure> [list ${_modns}::_onConfigure $instNs $path]]
 
                 # The frame widget creation above created a widget command named
                 # exactly as $path. Rename that widget command to ${path}_internal
                 # so we can provide a dispatcher at $path which handles subcommands.
                 set internalName "${path}_internal"
+                
                 # If an internal name already exists, move it aside
                 if {[llength [info commands $internalName]] > 0} {
                     catch {rename $internalName ${internalName}__old}
@@ -186,8 +258,8 @@ namespace eval [namespace current] {
                 }
 
                 # Expose the dispatcher at $path via interp alias so calls like
-                # "$path add ..." resolve to ::flexframe::_cmd_dispatch
-                if {[catch {interp alias {} $path {} ::flexframe::_cmd_dispatch $path} err2]} {
+                # "$path add ..." resolve to flexframe::_cmd_dispatch
+                if {[catch {interp alias {} $path {} ${_modns}::_cmd_dispatch $path} err2]} {
                     puts "warning: interp alias failed for $path: $err2"
                 }
 
@@ -195,7 +267,7 @@ namespace eval [namespace current] {
                 # We avoid creating additional interp aliases with unusual names.
 
                 # initial layout
-                ::flexframe::_recalc $instNs $path
+                ${_modns}::_recalc $instNs $path
             }
 
             ################################################################
@@ -204,14 +276,21 @@ namespace eval [namespace current] {
 
             # _cmd_dispatch: main dispatcher for per-instance command
             proc _cmd_dispatch {path cmd args} {
+                variable _modns
+                # Diagnostic: show module namespace and currently-registered path2ns keys
+                if {[info exists _modns] && $_modns ne {}} {
+                    puts "[clock format [clock seconds]] _cmd_dispatch: module=$_modns path2ns keys=[namespace eval $_modns {join [array names path2ns] , }]"
+                } else {
+                    puts "[clock format [clock seconds]] _cmd_dispatch: module=(unset)"
+                }
                 puts "[clock format [clock seconds]] _cmd_dispatch: path=$path cmd=$cmd args=$args"
                 switch -- $cmd {
-                    add {return [eval [list ::flexframe::_cmd_add $path] $args]}
-                    remove {return [eval [list ::flexframe::_cmd_remove $path] $args]}
-                    configure {return [eval [list ::flexframe::_cmd_configure $path] $args]}
-                    cget {return [eval [list ::flexframe::_cmd_cget $path] $args]}
-                    children {return [::flexframe::_cmd_children $path]}
-                    clear {return [eval [list ::flexframe::_cmd_clear $path] $args]}
+                    add {return [eval [list _cmd_add $path] $args]}
+                    remove {return [eval [list _cmd_remove $path] $args]}
+                    configure {return [eval [list _cmd_configure $path] $args]}
+                    cget {return [eval [list _cmd_cget $path] $args]}
+                    children {return [_cmd_children $path]}
+                    clear {return [eval [list _cmd_clear $path] $args]}
                     default {error "unknown subcommand $cmd"}
                 }
             }
@@ -219,7 +298,7 @@ namespace eval [namespace current] {
             # _cmd_configure: set or query options
             proc _cmd_configure {path args} {
                 # get instance ns from path->canvas mapping: we stored instance ns
-                set instNs [::flexframe::_inst_from_path $path]
+                set instNs [_inst_from_path $path]
                 if {$instNs eq {}} {error "internal: instance namespace not found"}
                 # no-op here; cfg_get will access instance values when needed
                 if {[llength $args] == 0} {
@@ -234,38 +313,39 @@ namespace eval [namespace current] {
                 } elseif {[llength $args] == 1} {
                     set opt [lindex $args 0]
                     namespace eval $instNs {variable cfg}
-                    return [::flexframe::cfg_get $instNs $opt]
+                    return [cfg_get $instNs $opt]
                 } else {
                     # set pairs
                     set i 0
                     while {$i < [llength $args]} {
                         set opt [lindex $args $i]; incr i
                         set val [lindex $args $i]; incr i
-                        ::flexframe::cfg_set $instNs $opt $val
+                        cfg_set $instNs $opt $val
                     }
                     # after configure, recalc
-                    ::flexframe::_recalc $instNs $path
+                    _recalc $instNs $path
                     return ""
                 }
             }
 
             # _cmd_cget: return value for option
             proc _cmd_cget {path opt} {
-                set instNs [::flexframe::_inst_from_path $path]
+                set instNs [_inst_from_path $path]
                 if {$instNs eq {}} {error "internal: instance namespace not found"}
                 namespace eval $instNs {variable cfg}
-                    return [::flexframe::cfg_get $instNs $opt]
+                    return [cfg_get $instNs $opt]
             }
 
             # _cmd_children: return children list
             proc _cmd_children {path} {
-                set instNs [::flexframe::_inst_from_path $path]
-                return [::flexframe::inst_get $instNs children]
+                set instNs [_inst_from_path $path]
+                if {$instNs eq {}} {error "internal: instance namespace not found"}
+                return [inst_get $instNs children]
             }
 
             # _cmd_clear: remove one or all children of the instance
             proc _cmd_clear {path args} {
-                set instNs [::flexframe::_inst_from_path $path]
+                set instNs [_inst_from_path $path]
                 namespace eval $instNs {variable children}
                 # remove canvas items
                 # delete canvas items recorded in the instance 'items' array
@@ -280,22 +360,33 @@ namespace eval [namespace current] {
                     }
                     set children {}
                 }
-                ::flexframe::_recalc $instNs $path
+                _recalc $instNs $path
             }
 
             # _cmd_add: add a child widget into the flexframe at optional index
             proc _cmd_add {path childPath args} {
+                # TEST
+                variable _modns
+                variable lastAdded
+                variable itemsMap
+                puts "Entering _cmd_add: path=$path child=$childPath args=$args"
+                if {[info exists _modns] && $_modns ne {}} {
+                    puts "[clock format [clock seconds]] _cmd_add: module=$_modns path2ns keys=[namespace eval $_modns {join [array names path2ns] , }]"
+                }
+                
                 set index {}
                 if {[llength $args] > 0} {set index [lindex $args 0]}
-                set instNs [::flexframe::_inst_from_path $path]
+                
+                set instNs [_inst_from_path $path]
                 if {$instNs eq {}} {error "internal: instance namespace not found"}
+                
                 namespace eval $instNs {
                     variable children; variable items; variable canvas
                 }
                 # debug: show entry and current module storage snapshot
                 puts "[clock format [clock seconds]] _cmd_add: ENTER path=$path child=$childPath instNs=$instNs"
-                puts "[clock format [clock seconds]] _cmd_add: pre-store ::flexframe::lastAdded=[info exists ::flexframe::lastAdded] value=[set ::flexframe::lastAdded]"
-                puts "[clock format [clock seconds]] _cmd_add: pre-store itemsMap keys=[join [array names ::flexframe::itemsMap] , ]"
+                puts "[clock format [clock seconds]] _cmd_add: pre-store lastAdded=[info exists lastAdded] value=[set lastAdded]"
+                puts "[clock format [clock seconds]] _cmd_add: pre-store itemsMap keys=[join [array names itemsMap] , ]"
                 # ensure child exists
                 if {![winfo exists $childPath]} {error "child $childPath doesn't exist"}
 
@@ -319,16 +410,16 @@ namespace eval [namespace current] {
                 # We no longer create the canvas window here; defer to _recalc which
                 # deterministically creates or finds canvas windows by tag.
                 puts "[clock format [clock seconds]] _cmd_add: appended child $childPath to $path (recalc will create window)"
-                ::flexframe::_recalc $instNs $path
+                ${_modns}::_recalc $instNs $path
             }
 
             # _cmd_remove: remove child
             proc _cmd_remove {path childPath} {
-                set instNs [::flexframe::_inst_from_path $path]
+                set instNs [${_modns}::_inst_from_path $path]
                 if {$instNs eq {}} {error "internal: instance namespace not found"}
 
                 # fetch current children list
-                set children [::flexframe::inst_get $instNs children]
+                set children [inst_get $instNs children]
                 set new {}
                 foreach c $children {
                     if {$c ne $childPath} {
@@ -347,26 +438,35 @@ namespace eval [namespace current] {
                     }
                 }
                 # store updated children list
-                ::flexframe::inst_set $instNs children $new
-                ::flexframe::_recalc $instNs $path
+                inst_set $instNs children $new
+                _recalc $instNs $path
             }
 
-            # _inst_from_path: find which instance namespace owns the given widget path
-            proc _inst_from_path {path} {
-                # Prefer the explicit mapping created at instance creation time.
-                variable path2ns
-                if {[info exists path2ns($path)]} {return $path2ns($path)}
-                return {}
-            }
+            
 
             ################################################################
             # Layout calculation and reflow
             ################################################################
 
+            # _schedule_recalc: debounce layout recalculation for an instance
+            proc _schedule_recalc {instNs path} {
+                variable _modns
+                # cancel any pending idle callback for this instance
+                if {[namespace eval $instNs {info exists _afterRecalcId}]} {
+                    set old [namespace eval $instNs {set _afterRecalcId}]
+                    if {$old ne ""} {
+                        catch {after cancel $old}
+                    }
+                }
+                # schedule a single idle-time recalc using fully-qualified proc
+                set id [after idle [list ${_modns}::_recalc $instNs $path]]
+                namespace eval $instNs [list set _afterRecalcId $id]
+            }
+
             # _onConfigure: called when outer frame or canvas is resized.
             proc _onConfigure {instNs path args} {
-                # simply trigger a recalc
-                ::flexframe::_recalc $instNs $path
+                # schedule (debounced) recalc to avoid duplicate rapid calls
+                _schedule_recalc $instNs $path
             }
 
             # _recalc: compute parcel sizes, number of columns/rows and place children
@@ -413,18 +513,23 @@ namespace eval [namespace current] {
                 }
 
                 # parcel size is max of maxw and maxh (square parcel)
+                # TODO: parcels can be rectangular
                 set parcel [expr {($maxw > $maxh) ? $maxw : $maxh}]
                 if {$parcel < 1} {set parcel 1}
 
                 # read configuration values from instance namespace
-                set orientRaw [::flexframe::cfg_get $instNs -orient]
-                set orient [lindex [split $orientRaw " "] 0]
-                set orient [string tolower $orient]
-                if {$orient == "v" || $orient == "vertical"} {set orient v} else {set orient h}
-                set spacing [::flexframe::_px $path [::flexframe::cfg_get $instNs -spacing]]
-                set minpad [::flexframe::_px $path [::flexframe::cfg_get $instNs -minpad]]
-                set minsizeSpec [::flexframe::cfg_get $instNs -minsize]
-                set autoscroll [::flexframe::cfg_get $instNs -autoscroll]
+                # Use the first lowercased character as the orientation key.
+                # Validation of allowed values should be done when setting the option.
+                set orientRaw [string tolower [string trim [cfg_get $instNs -orient]]]
+                if {$orientRaw eq ""} {
+                    set orient "v"
+                } else {
+                    set orient [string index $orientRaw 0]
+                }
+                set spacing [_px $path [cfg_get $instNs -spacing]]
+                set minpad [_px $path [cfg_get $instNs -minpad]]
+                set minsizeSpec [cfg_get $instNs -minsize]
+                set autoscroll [cfg_get $instNs -autoscroll]
 
                 # initialize scroll flags so diagnostics can safely reference them
                 set needV 0
@@ -446,7 +551,7 @@ namespace eval [namespace current] {
                     } else {set needV 0}
                     # if scrollbar will appear it reduces availW; recompute with scrollbar width
                     if {$needV} {
-                        set vscrollWidget [::flexframe::inst_get $instNs vscroll]
+                        set vscrollWidget [inst_get $instNs vscroll]
                         set sW [winfo reqwidth $vscrollWidget]
                         set availW2 [expr {$w - $sW}]
                         set cols [expr {int((($availW2 - 2*$minpad) + $spacing)/($parcel + $spacing))}]
@@ -464,7 +569,7 @@ namespace eval [namespace current] {
                     set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
                     if {$autoscroll && $contentW > $w} {set needH 1} else {set needH 0}
                     if {$needH} {
-                        set vscrollWidget [::flexframe::inst_get $instNs vscroll]
+                        set vscrollWidget [inst_get $instNs vscroll]
                         set sH [winfo reqheight $vscrollWidget]
                         set availH2 [expr {$h - $sH}]
                         set rows [expr {int((($availH2 - 2*$minpad) + $spacing)/($parcel + $spacing))}]
@@ -474,15 +579,16 @@ namespace eval [namespace current] {
                     }
                 }
 
-                # debug: report layout decisions and items
-                puts "[clock format [clock seconds]] flexframe::_recalc $path -- w=$w h=$h n=$n maxw=$maxw maxh=$maxh parcel=$parcel spacing=$spacing minpad=$minpad cols=$cols rows=$rows needV=$needV needH=$needH"
-                # print module-level itemsMap entries for this instance
+                # TEST : report layout decisions and items
+                puts "[clock format [clock seconds]] _recalc $path -- w=$w h=$h n=$n maxw=$maxw maxh=$maxh parcel=$parcel spacing=$spacing minpad=$minpad cols=$cols rows=$rows needV=$needV needH=$needH"
+                # TEST : print module-level itemsMap entries for this instance
                 variable itemsMap
+                variable lastAdded
                 puts "[clock format [clock seconds]] itemsMap keys: [join [array names itemsMap] , ]"
 
                 # Place children in order into the grid determined by rows/cols and anchor
                 # interpret -start anchor
-                set start [::flexframe::cfg_get $instNs -start]
+                set start [cfg_get $instNs -start]
                 # default anchor options
                 set xdir 1; set ydir 1
                 set startx 0; set starty 0
@@ -495,29 +601,14 @@ namespace eval [namespace current] {
 
                 # For simplicity we compute positions so that parcels are placed as squares
                 # Compute for orient v: fill horizontally first (cols) then wrap to next row
-                # Fetch the children list and items mapping locally; other structures live in instance ns
-                set children [namespace eval $instNs {return $children}]
-                # build a local dict of child -> itemId using the instance 'items' array
-                # if an item id is not present, try to find the canvas item by its stored tag
-                set itemsDict {}
-                namespace eval $instNs {
-                    variable items; variable itemsTag; variable canvas
-                    foreach child $children {
-                        if {[info exists items($child)]} {
-                            dict set ::itemsDict $child $items($child)
-                        } elseif {[info exists itemsTag($child)]} {
-                            set tag $itemsTag($child)
-                            # find the canvas item with that tag
-                            set found [eval [list $canvas find withtag $tag]]
-                            if {[llength $found] > 0} {
-                                dict set ::itemsDict $child [lindex $found 0]
-                                # store back into items array for future
-                                set items($child) [lindex $found 0]
-                            }
-                        }
-                    }
-                }
-                set canvasWidget [::flexframe::inst_get $instNs canvas]
+                # Fetch the children list and items mapping via the helper to avoid
+                # namespace scoping oddities.
+                set children [inst_get $instNs children]
+                # Diagnostic: show raw children value and length, and canvas widget
+                puts "[clock format [clock seconds]] _recalc: children='$children' llength=[llength $children]"
+                set canvasWidget [inst_get $instNs canvas]
+                puts "[clock format [clock seconds]] _recalc: canvasWidget=$canvasWidget"
+                puts "[clock format [clock seconds]] _recalc: instance children (ns): [join [namespace eval $instNs {array get children}] , ]"
                 set i 0
                 foreach child $children {
                     set idx $i
@@ -533,44 +624,65 @@ namespace eval [namespace current] {
                     set y [expr {$minpad + $row*($parcel + $spacing)}]
                     # adjust for start anchors xdir/ydir; if start indicates right-to-left, reflect
                     if {$xdir < 0} {
-                        if {$orient eq "v"} {
-                            # available width to compute right aligned positions
-                            set totalW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
-                            set x [expr {$w - $minpad - ($col+1)*$parcel - $col*$spacing}]
-                        } else {
-                            set totalW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
-                            set x [expr {$w - $minpad - ($col+1)*$parcel - $col*$spacing}]
-                        }
+                        set x [expr {$w - $minpad - ($col+1)*$parcel - $col*$spacing}]
                     }
                     if {$ydir < 0} {
-                        if {$orient eq v} {
-                            set totalH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$minpad}]
-                            set y [expr {$h - $minpad - ($row+1)*$parcel - $row*$spacing}]
-                        } else {
-                            set totalH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$minpad}]
-                            set y [expr {$h - $minpad - ($row+1)*$parcel - $row*$spacing}]
-                        }
+                        set y [expr {$h - $minpad - ($row+1)*$parcel - $row*$spacing}]
                     }
 
                     # compute anchor for canvas create_window according to -start
-                    set anchor [::flexframe::cfg_get $instNs -start]
+                    set anchor [cfg_get $instNs -start]
 
-                    # place window: lookup the canvas item id from the local items dict
-                    if {[dict exists $itemsDict $child]} {
-                        set itemId [dict get $itemsDict $child]
-                        if {$itemId ne {}} {
+                    puts "[clock format [clock seconds]] _recalc: checking child=$child winfo_exists=[winfo exists $child] canvasWidget=$canvasWidget"
+
+                    if {[namespace eval $instNs [list info exists items($child)]]} {
+                        set itemId [namespace eval $instNs [list set items($child)]]
+                        if {$itemId ne ""} {
                             eval [list $canvasWidget coords $itemId $x $y]
                             eval [list $canvasWidget itemconfigure $itemId -anchor $anchor]
                         }
+                    } elseif {[namespace eval $instNs [list info exists itemsTag($child)]]} {
+                        set tagFound [namespace eval $instNs [list set itemsTag($child)]]
+                        set found [eval [list $canvasWidget find withtag $tagFound]]
+                        if {[llength $found] > 0} {
+                            set id [lindex $found 0]
+                            namespace eval $instNs [list set items($child) $id]
+                            eval [list $canvasWidget coords $id $x $y]
+                            eval [list $canvasWidget itemconfigure $id -anchor $anchor]
+                        } else {
+                            set safePath [string map {. _} $path]
+                            set safeChild [string map {. / : _} $child]
+                            set tagName "flexframe_${safePath}_${safeChild}"
+                            # create the canvas window and capture the returned id
+                            set newId [eval [list $canvasWidget create window $x $y -window $child -anchor $anchor -tags $tagName]]
+                            puts "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
+                            if {$newId eq {}} {
+                                puts "[clock format [clock seconds]] _recalc: ERROR creating window for $child (empty id)"
+                            } else {
+                                namespace eval $instNs [list set items($child) $newId]
+                                namespace eval $instNs [list set itemsTag($child) $tagName]
+                                set key [list $path $child]
+                                set itemsMap($key) $newId
+                                set lastAdded $key
+                                puts "[clock format [clock seconds]] _recalc: created window id $newId for $child (stored key=$key tag=$tagName)"
+                            }
+                        }
                     } else {
-                        # If no canvas window exists for this child yet, create one now
-                        set newId [eval [list $canvasWidget create window $x $y -window $child -anchor $anchor]]
-                        # store in module-level itemsMap for future reference using the canonical key
-                        set key [list $path $child]
-                        set ::flexframe::itemsMap($key) $newId
-                        set ::flexframe::lastAdded $key
-                        dict set itemsDict $child $newId
-                        puts "[clock format [clock seconds]] _recalc: created window id $newId for $child (stored key=$key)"
+                        set safePath [string map {. _} $path]
+                        set safeChild [string map {. / : _} $child]
+                        set tagName "flexframe_${safePath}_${safeChild}"
+                        set newId [eval [list $canvasWidget create window $x $y -window $child -anchor $anchor -tags $tagName]]
+                        puts "[clock format [clock seconds]] _recalc: create returned newId=$newId for child=$child"
+                        if {$newId eq {}} {
+                            puts "[clock format [clock seconds]] _recalc: ERROR creating window for $child (empty id)"
+                        } else {
+                            namespace eval $instNs [list set items($child) $newId]
+                            namespace eval $instNs [list set itemsTag($child) $tagName]
+                            set key [list $path $child]
+                            set itemsMap($key) $newId
+                            set lastAdded $key
+                            puts "[clock format [clock seconds]] _recalc: created window id $newId for $child (stored key=$key tag=$tagName)"
+                        }
                     }
                     incr i
                 }
@@ -578,22 +690,26 @@ namespace eval [namespace current] {
                 # update scrollregion and show/remove scrollbar as needed
                 set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
                 set contentH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$minpad}]
-                set canvasWidget [::flexframe::inst_get $instNs canvas]
+                set canvasWidget [inst_get $instNs canvas]
                 eval [list $canvasWidget configure -scrollregion [list 0 0 $contentW $contentH]]
-                set vscrollWidget [::flexframe::inst_get $instNs vscroll]
+                set vscrollWidget [inst_get $instNs vscroll]
                 if {$needV} {
                     eval [list grid $vscrollWidget -row 0 -column 1 -sticky ns]
                 } else {
                     eval [list grid remove $vscrollWidget]
                 }
+
+                # Final diagnostics: list canvas items and per-instance items array
+                puts "[clock format [clock seconds]] _recalc: canvas find all -> [eval [list $canvasWidget find all]]"
+                puts "[clock format [clock seconds]] _recalc: instance items (ns) -> [namespace eval $instNs {join [array names items] , }]"
             }
 
-        } ;# end namespace ::flexframe
+        } ;# end namespace flexframe
 
         # Diagnostic: dump internal module state for debugging
-        proc ::flexframe::dump_state {} {
+        proc dump_state {} {
             variable path2ns
-            puts "--- flexframe::dump_state ---"
+                puts "--- flexframe::dump_state ---"
             puts "path2ns keys: [join [array names path2ns] , ]"
             foreach p [array names path2ns] {
                 set inst [set path2ns($p)]
@@ -621,9 +737,15 @@ namespace eval [namespace current] {
         if {[llength [info procs flexframe]] == 0} {
             proc flexframe {path args} {
                 # delegate creation to the module; expand args properly
-                return [eval [list ::flexframe::create $path] $args]
+                return [eval [list flexframe::create $path] $args]
             }
         }
+        # Note: compatibility shims for a root-based ::flexframe namespace were
+        # intentionally removed. This module creates a `flexframe` namespace
+        # under the namespace that sources this file (via
+        # `namespace eval [namespace current] { namespace eval flexframe { ... } }`).
+        # Callers should reference the module relative to their namespace or use
+        # the provided `flexframe` helper proc in the sourcing namespace.
     }
 }
 
