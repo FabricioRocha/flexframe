@@ -32,7 +32,7 @@ grid .left -row 0 -column 0 -sticky news
 grid rowconfigure .left 0 -weight 1
 grid columnconfigure .left 0 -weight 1
 
-flexframe .left.vf -orient vertical -spacing 2 -minpad 5 -start nw -autoscroll 1
+flexframe .left.vf -orient vertical -spacing 2 -minpad 5 -start nw -autoscroll 1 -center 0
 grid .left.vf -in .left -row 0 -column 0 -sticky news
 
 # Horizontal flexframe on right
@@ -41,7 +41,7 @@ grid .right -row 0 -column 1 -sticky news
 grid rowconfigure .right 0 -weight 1
 grid columnconfigure .right 0 -weight 1
 
-flexframe .right.hf -orient horizontal -spacing 2 -minpad 5 -start nw -autoscroll 1
+flexframe .right.hf -orient horizontal -spacing 2 -minpad 5 -start nw -autoscroll 1 -center 1
 grid .right.hf -in .right -row 0 -column 0 -sticky news
 
 # Create 15 square-ish buttons for each flexframe

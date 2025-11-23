@@ -90,6 +90,10 @@ namespace eval [namespace current] {
                         set vv [string tolower [string trim $v]]
                         if {$vv eq "1" || $vv eq "true"} {set v 1} elseif {$vv eq "0" || $vv eq "false"} {set v 0} else {error "invalid value for -autoscroll: '$val' (expected 0|1|true|false)"}
                     }
+                    -center {
+                        set vv [string tolower [string trim $v]]
+                        if {$vv eq "1" || $vv eq "true"} {set v 1} elseif {$vv eq "0" || $vv eq "false"} {set v 0} else {error "invalid value for -center: '$val' (expected 0|1|true|false)"}
+                    }
                     -debug {
                         set vv [string tolower [string trim $v]]
                         if {$vv eq "1" || $vv eq "true"} {set v 1} elseif {$vv eq "0" || $vv eq "false"} {set v 0} else {error "invalid value for -debug: '$val' (expected 0|1|true|false)"}
@@ -193,6 +197,7 @@ namespace eval [namespace current] {
                     -orient vertical
                     -start nw
                     -autoscroll 1
+                    -center 0
                     -debug 0
                     -minsize {}
                     -sticky news
@@ -612,12 +617,34 @@ namespace eval [namespace current] {
                     }
                 }
 
+                # determine centering behavior
+                set centerFlag [cfg_get $instNs -center]
+
                 # TEST : report layout decisions and items
                 idbg $instNs "[clock format [clock seconds]] _recalc $path -- w=$w h=$h n=$n maxw=$maxw maxh=$maxh parcel=$parcel spacing=$spacing minpad=$minpad cols=$cols rows=$rows needV=$needV needH=$needH"
                 # TEST : print module-level itemsMap entries for this instance
                 variable itemsMap
                 variable lastAdded
                 idbg $instNs "[clock format [clock seconds]] itemsMap keys: [join [array names itemsMap] , ]"
+
+                # compute per-side padding used when placing children. If centering
+                # is requested, attempt to center the children block while
+                # respecting -minpad as a minimal padding on each side.
+                set contentWidthNoPads [expr {$cols*$parcel + ($cols-1)*$spacing}]
+                set contentHeightNoPads [expr {$rows*$parcel + ($rows-1)*$spacing}]
+                set leftPad $minpad
+                set topPad $minpad
+                if {$centerFlag} {
+                    if {$orient eq "v"} {
+                        set extra [expr {$w - $contentWidthNoPads}]
+                        set leftPad [expr {int($extra/2)}]
+                        if {$leftPad < $minpad} {set leftPad $minpad}
+                    } else {
+                        set extra [expr {$h - $contentHeightNoPads}]
+                        set topPad [expr {int($extra/2)}]
+                        if {$topPad < $minpad} {set topPad $minpad}
+                    }
+                }
 
                 # Place children in order into the grid determined by rows/cols and anchor
                 # interpret -start anchor
@@ -653,14 +680,27 @@ namespace eval [namespace current] {
                         set col [expr {int($idx / $rows)}]
                     }
                     # compute top-left corner inside canvas
-                    set x [expr {$minpad + $col*($parcel + $spacing)}]
-                    set y [expr {$minpad + $row*($parcel + $spacing)}]
+                    if {$orient eq "v"} {
+                        set x [expr {$leftPad + $col*($parcel + $spacing)}]
+                        set y [expr {$minpad + $row*($parcel + $spacing)}]
+                    } else {
+                        set x [expr {$minpad + $col*($parcel + $spacing)}]
+                        set y [expr {$topPad + $row*($parcel + $spacing)}]
+                    }
                     # adjust for start anchors xdir/ydir; if start indicates right-to-left, reflect
                     if {$xdir < 0} {
-                        set x [expr {$w - $minpad - ($col+1)*$parcel - $col*$spacing}]
+                        if {$orient eq "v"} {
+                            set x [expr {$w - $leftPad - ($col+1)*$parcel - $col*$spacing}]
+                        } else {
+                            set x [expr {$w - $minpad - ($col+1)*$parcel - $col*$spacing}]
+                        }
                     }
                     if {$ydir < 0} {
-                        set y [expr {$h - $minpad - ($row+1)*$parcel - $row*$spacing}]
+                        if {$orient eq "h"} {
+                            set y [expr {$h - $topPad - ($row+1)*$parcel - $row*$spacing}]
+                        } else {
+                            set y [expr {$h - $minpad - ($row+1)*$parcel - $row*$spacing}]
+                        }
                     }
 
                     # compute anchor for canvas create_window according to -start
@@ -724,8 +764,8 @@ namespace eval [namespace current] {
                 }
 
                 # update scrollregion and show/remove scrollbar as needed
-                set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
-                set contentH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$minpad}]
+                set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$leftPad}]
+                set contentH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$topPad}]
                 set canvasWidget [inst_get $instNs canvas]
                 eval [list $canvasWidget configure -scrollregion [list 0 0 $contentW $contentH]]
                 set vscrollWidget [inst_get $instNs vscroll]
