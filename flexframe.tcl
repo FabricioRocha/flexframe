@@ -1,5 +1,7 @@
 # flexframe.tcl
-#
+#   Fabricio Rocha, 2025-11
+#   CC-BY-SA 4.0 International license - see https://creativecommons.org/licenses/by-sa/4.0/legalcode
+#   
 # A Tcl/Tk "megawidget" implementing a responsive, grid-like container
 # called "flexframe". Written using namespaces (not TclOO), and designed
 # to be sourced into any namespace. After sourcing, create instances with
@@ -338,11 +340,11 @@ namespace eval [namespace current] {
                 # no-op here; cfg_get will access instance values when needed
                 if {[llength $args] == 0} {
                     # return list describing available options: name dbname dbclass default current
+                    # Build array outside the instance namespace to avoid variable scoping issues.
+                    set arr [namespace eval $instNs {array get cfg}]
                     set result {}
-                    namespace eval $instNs {
-                        foreach {k v} [array get cfg] {
-                            lappend result $k {} {} $v $v
-                        }
+                    foreach {k v} $arr {
+                        lappend result $k {} {} $v $v
                     }
                     return $result
                 } elseif {[llength $args] == 1} {
@@ -550,10 +552,13 @@ namespace eval [namespace current] {
                     return
                 }
 
-                # parcel size is max of maxw and maxh (square parcel)
-                # TODO: parcels can be rectangular
-                set parcel [expr {($maxw > $maxh) ? $maxw : $maxh}]
-                if {$parcel < 1} {set parcel 1}
+                # parcel size: support rectangular parcels (width and height)
+                # parcelW: horizontal parcel (used for column width)
+                # parcelH: vertical parcel (used for row height)
+                set parcelW $maxw
+                set parcelH $maxh
+                if {$parcelW < 1} {set parcelW 1}
+                if {$parcelH < 1} {set parcelH 1}
 
                 # read configuration values from instance namespace
                 # Use the first lowercased character as the orientation key.
@@ -575,13 +580,13 @@ namespace eval [namespace current] {
 
                 # compute how many columns/rows depending on orientation
                 if {$orient eq "v"} {
-                    # width is stretchy dimension; number of columns = floor((w - 2*minpad + spacing)/(parcel+spacing))
+                    # width is stretchy dimension; number of columns = floor((w - 2*minpad + spacing)/(parcelW+spacing))
                     set availW $w
-                    set cols [expr {int((($availW - 2*$minpad) + $spacing)/($parcel + $spacing))}]
+                    set cols [expr {int((($availW - 2*$minpad) + $spacing)/($parcelW + $spacing))}]
                     if {$cols < 1} {set cols 1}
                     set rows [expr {int((($n + $cols -1)/$cols))}]
-                    # compute content height
-                    set contentH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$minpad}]
+                    # compute content height (uses parcelH per row)
+                    set contentH [expr {$rows*$parcelH + ($rows-1)*$spacing + 2*$minpad}]
                     # decide if scrollbar required
                     if {$autoscroll && $contentH > $h} {
                         # ensure scrollbar visible
@@ -592,28 +597,28 @@ namespace eval [namespace current] {
                         set vscrollWidget [inst_get $instNs vscroll]
                         set sW [winfo reqwidth $vscrollWidget]
                         set availW2 [expr {$w - $sW}]
-                        set cols [expr {int((($availW2 - 2*$minpad) + $spacing)/($parcel + $spacing))}]
+                        set cols [expr {int((($availW2 - 2*$minpad) + $spacing)/($parcelW + $spacing))}]
                         if {$cols < 1} {set cols 1}
                         set rows [expr {int((($n + $cols -1)/$cols))}]
-                        set contentH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$minpad}]
+                        set contentH [expr {$rows*$parcelH + ($rows-1)*$spacing + 2*$minpad}]
                     }
                     # compute columns again
                 } else {
                     # horizontal growth: roles swapped
                     set availH $h
-                    set rows [expr {int((($availH - 2*$minpad) + $spacing)/($parcel + $spacing))}]
+                    set rows [expr {int((($availH - 2*$minpad) + $spacing)/($parcelH + $spacing))}]
                     if {$rows < 1} {set rows 1}
                     set cols [expr {int((($n + $rows -1)/$rows))}]
-                    set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
+                    set contentW [expr {$cols*$parcelW + ($cols-1)*$spacing + 2*$minpad}]
                     if {$autoscroll && $contentW > $w} {set needH 1} else {set needH 0}
                     if {$needH} {
                         set hscrollWidget [inst_get $instNs hscroll]
                         set sH [winfo reqheight $hscrollWidget]
                         set availH2 [expr {$h - $sH}]
-                        set rows [expr {int((($availH2 - 2*$minpad) + $spacing)/($parcel + $spacing))}]
+                        set rows [expr {int((($availH2 - 2*$minpad) + $spacing)/($parcelH + $spacing))}]
                         if {$rows < 1} {set rows 1}
                         set cols [expr {int((($n + $rows -1)/$rows))}]
-                        set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$minpad}]
+                        set contentW [expr {$cols*$parcelW + ($cols-1)*$spacing + 2*$minpad}]
                     }
                 }
 
@@ -621,7 +626,7 @@ namespace eval [namespace current] {
                 set centerFlag [cfg_get $instNs -center]
 
                 # TEST : report layout decisions and items
-                idbg $instNs "[clock format [clock seconds]] _recalc $path -- w=$w h=$h n=$n maxw=$maxw maxh=$maxh parcel=$parcel spacing=$spacing minpad=$minpad cols=$cols rows=$rows needV=$needV needH=$needH"
+                idbg $instNs "[clock format [clock seconds]] _recalc $path -- w=$w h=$h n=$n maxw=$maxw maxh=$maxh parcelW=$parcelW parcelH=$parcelH spacing=$spacing minpad=$minpad cols=$cols rows=$rows needV=$needV needH=$needH"
                 # TEST : print module-level itemsMap entries for this instance
                 variable itemsMap
                 variable lastAdded
@@ -630,8 +635,8 @@ namespace eval [namespace current] {
                 # compute per-side padding used when placing children. If centering
                 # is requested, attempt to center the children block while
                 # respecting -minpad as a minimal padding on each side.
-                set contentWidthNoPads [expr {$cols*$parcel + ($cols-1)*$spacing}]
-                set contentHeightNoPads [expr {$rows*$parcel + ($rows-1)*$spacing}]
+                set contentWidthNoPads [expr {$cols*$parcelW + ($cols-1)*$spacing}]
+                set contentHeightNoPads [expr {$rows*$parcelH + ($rows-1)*$spacing}]
                 set leftPad $minpad
                 set topPad $minpad
                 if {$centerFlag} {
@@ -681,25 +686,25 @@ namespace eval [namespace current] {
                     }
                     # compute top-left corner inside canvas
                     if {$orient eq "v"} {
-                        set x [expr {$leftPad + $col*($parcel + $spacing)}]
-                        set y [expr {$minpad + $row*($parcel + $spacing)}]
+                        set x [expr {$leftPad + $col*($parcelW + $spacing)}]
+                        set y [expr {$minpad + $row*($parcelH + $spacing)}]
                     } else {
-                        set x [expr {$minpad + $col*($parcel + $spacing)}]
-                        set y [expr {$topPad + $row*($parcel + $spacing)}]
+                        set x [expr {$minpad + $col*($parcelW + $spacing)}]
+                        set y [expr {$topPad + $row*($parcelH + $spacing)}]
                     }
                     # adjust for start anchors xdir/ydir; if start indicates right-to-left, reflect
                     if {$xdir < 0} {
                         if {$orient eq "v"} {
-                            set x [expr {$w - $leftPad - ($col+1)*$parcel - $col*$spacing}]
+                            set x [expr {$w - $leftPad - ($col+1)*$parcelW - $col*$spacing}]
                         } else {
-                            set x [expr {$w - $minpad - ($col+1)*$parcel - $col*$spacing}]
+                            set x [expr {$w - $minpad - ($col+1)*$parcelW - $col*$spacing}]
                         }
                     }
                     if {$ydir < 0} {
                         if {$orient eq "h"} {
-                            set y [expr {$h - $topPad - ($row+1)*$parcel - $row*$spacing}]
+                            set y [expr {$h - $topPad - ($row+1)*$parcelH - $row*$spacing}]
                         } else {
-                            set y [expr {$h - $minpad - ($row+1)*$parcel - $row*$spacing}]
+                            set y [expr {$h - $minpad - ($row+1)*$parcelH - $row*$spacing}]
                         }
                     }
 
@@ -764,8 +769,8 @@ namespace eval [namespace current] {
                 }
 
                 # update scrollregion and show/remove scrollbar as needed
-                set contentW [expr {$cols*$parcel + ($cols-1)*$spacing + 2*$leftPad}]
-                set contentH [expr {$rows*$parcel + ($rows-1)*$spacing + 2*$topPad}]
+                set contentW [expr {$cols*$parcelW + ($cols-1)*$spacing + 2*$leftPad}]
+                set contentH [expr {$rows*$parcelH + ($rows-1)*$spacing + 2*$topPad}]
                 set canvasWidget [inst_get $instNs canvas]
                 eval [list $canvasWidget configure -scrollregion [list 0 0 $contentW $contentH]]
                 set vscrollWidget [inst_get $instNs vscroll]

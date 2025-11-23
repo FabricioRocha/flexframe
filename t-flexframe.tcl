@@ -53,7 +53,7 @@ for {set i 1} {$i <= 15} {incr i} {
     }
 
     set btnH ".right.hf.btn$i"
-    button $btnH -text $i -width 4 -height 2
+    button $btnH -text $i -width 10 -height 1
     if {[catch { .right.hf add $btnH } err]} {
         puts stderr "Error adding $btnH to .right.hf: $err"
     }
@@ -62,6 +62,10 @@ for {set i 1} {$i <= 15} {incr i} {
 # Diagnostics: show children after creation (public API only)
 puts "Left children: [.left.vf children]"
 puts "Right children: [.right.hf children]"
+
+# Diagnostics: show configure and cget outputs for the first flexframe
+puts "Left flexframe configure: [.left.vf configure]"
+puts "Left flexframe cget for orient: [.left.vf cget -orient]"
 
 # Controls for left (vertical) flexframe
 frame .controlsL
