@@ -5,16 +5,20 @@
 
 package require Tk
 
-# Source the megawidget (adjust path if necessary)
+# Source the module-style file using the script directory so the test can
+# be invoked from any current working directory. Fall back to CWD if needed.
 set script_dir [file dirname [info script]]
 if {$script_dir eq {}} {set script_dir .}
-set flexfile [file join $script_dir flexframe.tcl]
-if {[file exists $flexfile]} {
-    source $flexfile
+set modfile [file join $script_dir flexframe-0.1.tm]
+if {[file exists $modfile]} {
+    source $modfile
+} elseif {[file exists "flexframe-0.1.tm"]} {
+    source flexframe-0.1.tm
 } else {
-    puts stderr "Could not find flexframe.tcl in $script_dir"
-    exit 1
+    puts stderr "Could not find flexframe-0.1.tm in $script_dir or current directory"
 }
+
+
 
 # Create main window layout
 wm title . "flexframe test"
