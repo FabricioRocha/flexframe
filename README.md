@@ -48,6 +48,10 @@ When set to 1 (default), a scrollbar will be automatically added in the same dir
 
 If set to 1 or _true_, the block of children widgets will be centered in the "stretchy" direction of the flexframe. Otherwise, it will be aligned to the corner defined by the `-start` option. Default value is 0.
 
+#### -debug _boolean_
+
+If set to 1, internal data about the flexframe and its children is printed to _stdout_ during usage. Default is 0.
+
 #### -minpad _size_
 
 Defines the minimal padding to be respected among the children and the borders of the flexframe. In the "stretchy" direction, the actual distance varies according to how many children can be shown in the current viewport, and _size_ represents the minimal distance added both before and after the children; in the "growth" direction _size_ remains fixed and is simply added to both sides of the children block, adding up to the scrollable portion. The value for _size_ can be set in any of the forms accepted by _Tk_GetPixel_: an integer number followed by nothing meaning pixels, followed by "c" meaning centimeters, followed by "p" for points, followed by "m" for millimeters. The default value is 0.

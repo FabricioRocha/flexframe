@@ -1,4 +1,4 @@
-# flexframe.tcl
+# flexframe
 #   Fabricio Rocha, 2025-11
 #   CC-BY-SA 4.0 International license - see https://creativecommons.org/licenses/by-sa/4.0/legalcode
 #   
@@ -12,7 +12,7 @@
 # Compatible with Tcl/Tk 8.6 and 9.0.
 package require Tk
 
-package provide flexframe 0.1
+package provide flexframe 0.1.1
 
 namespace eval [namespace current] {
     if {![info exists flexframe_loaded]} {
@@ -775,6 +775,22 @@ namespace eval [namespace current] {
                 set contentH [expr {$rows*$parcelH + ($rows-1)*$spacing + 2*$topPad}]
                 set canvasWidget [inst_get $instNs canvas]
                 eval [list $canvasWidget configure -scrollregion [list 0 0 $contentW $contentH]]
+                # If autoscroll is enabled, constrain the canvas to the
+                # available size so scrollbars can appear. If autoscroll is
+                # disabled, request the content size only along the primary
+                # orientation axis so the container requests enough space in
+                # that axis while leaving the cross-axis flexible.
+                if {$autoscroll} {
+                    eval [list $canvasWidget configure -width $w -height $h]
+                } else {
+                    if {$orient eq "v"} {
+                        # vertical orientation: request full content height, keep width available
+                        eval [list $canvasWidget configure -width $w -height $contentH]
+                    } else {
+                        # horizontal orientation: request full content width, keep height available
+                        eval [list $canvasWidget configure -width $contentW -height $h]
+                    }
+                }
                 set vscrollWidget [inst_get $instNs vscroll]
                 set hscrollWidget [inst_get $instNs hscroll]
                 if {$needV} {
