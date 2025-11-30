@@ -12,7 +12,7 @@
 # Compatible with Tcl/Tk 8.6 and 9.0.
 package require Tk
 
-package provide flexframe 0.1.1
+package provide flexframe 0.1
 
 namespace eval [namespace current] {
     if {![info exists flexframe_loaded]} {
@@ -102,8 +102,50 @@ namespace eval [namespace current] {
                         set vv [string tolower [string trim $v]]
                         if {$vv eq "1" || $vv eq "true"} {set v 1} elseif {$vv eq "0" || $vv eq "false"} {set v 0} else {error "invalid value for -debug: '$val' (expected 0|1|true|false)"}
                     }
+                    -sticky {
+                        # Ensure sticky contains only the characters n,e,w,s (any order allowed)
+                        set s [string trim $v]
+                        if {$s ne {}} {
+                            # collapse into individual chars (ignore duplicates)
+                            foreach ch [split $s ""] {
+                                if {$ch eq ""} continue
+                                if {[string first $ch "news"] == -1} {error "invalid value for -sticky: '$v' (allowed characters: n,e,w,s)"}
+                            }
+                        }
+                    }
+                    
+                    -minsize -
+                    -minpad -
+                    -spacing {
+                        # Validate non-negative size-like options. Convert to pixels
+                        # when the inner widget exists; otherwise reject obvious
+                        # negative numeric literals.
+                        if {$v ne {}} {
+                            set wPath [inst_get $instNs w]
+                            if {$wPath ne {} && [winfo exists $wPath]} {
+                                if {[catch {set px [_px $wPath $v]} err]} {error "invalid value for $k: '$v' ($err)"}
+                                if {$px < 0} {error "invalid value for $k: '$v' (must be non-negative)"}
+                            } else {
+                                if {[string match -strict "-*" $v] && [string is double -strict $v]} {error "invalid value for $k: '$v' (must be non-negative)"}
+                            }
+                        }
+                    }
+                    
                     default {
-                        # other options left permissive; validation may be done elsewhere
+                        # forward unknown options to the inner frame widget stored as 'w'
+                        # Prefer the stored internal widget command (renamed to avoid
+                        # the dispatcher interp-alias) to avoid re-invoking the
+                        # widget command which would route back to the dispatcher.
+                        set internalCmd [inst_get $instNs internalWidgetCmd]
+                        if {$internalCmd ne {} && [llength [info commands $internalCmd]] > 0} {
+                            eval [list $internalCmd configure $k $v]
+                        } else {
+                            # Fallback: try the public path if nothing else available
+                            set wPath [inst_get $instNs w]
+                            if {$wPath ne {}} {
+                                eval [list $wPath configure $k $v]
+                            }
+                        }
                     }
                 }
                 namespace eval $instNs [list set cfg($key) $v]
@@ -233,10 +275,8 @@ namespace eval [namespace current] {
                 foreach {k v} $defaults {
                     namespace eval $instNs [list set cfg($k) $v]
                 }
-                # apply given options (expand in outer scope then set in instance ns)
-                foreach {k v} [array get given] {
-                    namespace eval $instNs [list set cfg($k) $v]
-                }
+                # NOTE: do not apply given options yet — defer to after inner widgets
+                # are created so cfg_set can validate and forward them properly.
 
                 set canvasName ${path}.c
                 ::canvas $canvasName -highlightthickness 0 -borderwidth 0 -confine 1
@@ -296,6 +336,10 @@ namespace eval [namespace current] {
                     }
                 }
 
+                # Store the internal widget command name in the instance namespace
+                # so cfg_set can forward options to the real widget command
+                namespace eval $instNs [list set internalWidgetCmd $internalName]
+
                 # Expose the dispatcher at $path via interp alias so calls like
                 # "$path add ..." resolve to flexframe::_cmd_dispatch
                 if {[catch {interp alias {} $path {} ${_modns}::_cmd_dispatch $path} err2]} {
@@ -305,8 +349,47 @@ namespace eval [namespace current] {
                 # configure/cget are available via the command dispatch (e.g. "$path configure ...").
                 # We avoid creating additional interp aliases with unusual names.
 
+                # Apply a small set of preflight options that affect initial sizing
+                # before computing minsize and requesting initial canvas size.
+                # This allows callers to pass -minsize, -orient, -minpad, -spacing
+                # at creation time and have them respected immediately.
+                set preflight {-minsize -orient -minpad -spacing}
+                foreach k $preflight {
+                    if {[info exists given($k)]} {
+                        cfg_set $instNs $k $given($k)
+                        unset given($k)
+                    }
+                }
+
+                # Ensure the canvas requests a sensible minimum size at creation
+                # when -minsize is explicitly set, or use a small default (12px)
+                # on the stretch axis when -minsize is absent so the widget is visible.
+                set orientRaw [string tolower [string trim [cfg_get $instNs -orient]]]
+                if {$orientRaw eq ""} {set orient "v"} else {set orient [string index $orientRaw 0]}
+                set minsizeSpec [cfg_get $instNs -minsize]
+                if {$minsizeSpec ne {}} {
+                    # convert to pixels using the canvas widget
+                    set minsizePx [_px $canvasName $minsizeSpec]
+                } else {
+                    set minsizePx 12
+                }
+                # Apply remaining given options now using cfg_set so they are validated
+                # and forwarded to the inner frame (stored in 'w') when appropriate.
+                foreach {k v} [array get given] {
+                    cfg_set $instNs $k $v
+                }
+                if {$orient eq "v"} {
+                    # vertical orientation: stretch axis is width (request min width)
+                    eval [list $canvasName configure -width $minsizePx]
+                } else {
+                    # horizontal orientation: stretch axis is height (request min height)
+                    eval [list $canvasName configure -height $minsizePx]
+                }
+
                 # initial layout
                 ${_modns}::_recalc $instNs $path
+
+                return $path
             }
 
             ################################################################
@@ -576,6 +659,19 @@ namespace eval [namespace current] {
                 set minsizeSpec [cfg_get $instNs -minsize]
                 set autoscroll [cfg_get $instNs -autoscroll]
 
+                # compute minsize in pixels for the "stretch" dimension
+                if {$minsizeSpec ne {}} {
+                    # convert configured spec to pixels
+                    set minsizePx [_px $path $minsizeSpec]
+                } else {
+                    # default: largest child size plus padding on both sides
+                    if {$orient eq "v"} {
+                        set minsizePx [expr {$parcelW + 2*$minpad}]
+                    } else {
+                        set minsizePx [expr {$parcelH + 2*$minpad}]
+                    }
+                }
+
                 # initialize scroll flags so diagnostics can safely reference them
                 set needV 0
                 set needH 0
@@ -781,14 +877,23 @@ namespace eval [namespace current] {
                 # orientation axis so the container requests enough space in
                 # that axis while leaving the cross-axis flexible.
                 if {$autoscroll} {
-                    eval [list $canvasWidget configure -width $w -height $h]
+                    # Ensure the stretchy dimension is at least minsizePx
+                    if {$orient eq "v"} {
+                        set reqW [expr {$w < $minsizePx ? $minsizePx : $w}]
+                        eval [list $canvasWidget configure -width $reqW -height $h]
+                    } else {
+                        set reqH [expr {$h < $minsizePx ? $minsizePx : $h}]
+                        eval [list $canvasWidget configure -width $w -height $reqH]
+                    }
                 } else {
                     if {$orient eq "v"} {
-                        # vertical orientation: request full content height, keep width available
-                        eval [list $canvasWidget configure -width $w -height $contentH]
+                        # vertical orientation: request full content height, request at least minsize width
+                        set reqW [expr {$w < $minsizePx ? $minsizePx : $w}]
+                        eval [list $canvasWidget configure -width $reqW -height $contentH]
                     } else {
-                        # horizontal orientation: request full content width, keep height available
-                        eval [list $canvasWidget configure -width $contentW -height $h]
+                        # horizontal orientation: request full content width, request at least minsize height
+                        set reqH [expr {$h < $minsizePx ? $minsizePx : $h}]
+                        eval [list $canvasWidget configure -width $contentW -height $reqH]
                     }
                 }
                 set vscrollWidget [inst_get $instNs vscroll]
